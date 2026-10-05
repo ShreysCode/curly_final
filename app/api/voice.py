@@ -1,5 +1,4 @@
 import os
-import tempfile
 
 from fastapi import (
     APIRouter,
@@ -10,12 +9,13 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 
+from app.core.audio_pipeline import (
+    AudioPipelineError,
+    process_audio,
+)
 from app.core.curly import Curly, CurlyState
 from app.stt.service import STTService
 from app.tts.service import TTSService
-
-
-MAX_AUDIO_BYTES = 10 * 1024 * 1024
 
 
 def create_voice_router(
@@ -31,14 +31,40 @@ def create_voice_router(
         file: UploadFile = File(...),
         context: str | None = Form(None),
     ):
-        if session_id not in curly.sessions:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "code": "INVALID_SESSION",
-                    "message": "Session not found.",
-                },
-            )
+
+        # ====================================================
+        # VOICE ENDPOINT DIAGNOSTIC
+        # ====================================================
+
+        print()
+        print("========== VOICE ENDPOINT REACHED ==========")
+
+        print(
+            "Session ID:",
+            session_id,
+        )
+
+        print(
+            "Filename:",
+            file.filename,
+        )
+
+        print(
+            "Content Type:",
+            file.content_type,
+        )
+
+        print(
+            "Context:",
+            context,
+        )
+
+        print("=============================================")
+        print()
+
+        # ====================================================
+        # VALIDATE AUDIO FILE
+        # ====================================================
 
         if not file.filename:
             raise HTTPException(
@@ -49,188 +75,218 @@ def create_voice_router(
                 },
             )
 
-        temp_path = None
-
         try:
-            environment_context = {}
 
-            if context:
-                import json
-
-                try:
-                    environment_context = json.loads(context)
-                except json.JSONDecodeError as error:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "code": "INVALID_CONTEXT",
-                            "message": "Context must be valid JSON.",
-                        },
-                    ) from error
+            # =================================================
+            # READ AUDIO
+            # =================================================
 
             content = await file.read()
 
-            if not content:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "code": "EMPTY_AUDIO",
-                        "message": "Audio file is empty.",
-                    },
-                )
-
-            if len(content) > MAX_AUDIO_BYTES:
-                raise HTTPException(
-                    status_code=413,
-                    detail={
-                        "code": "AUDIO_TOO_LARGE",
-                        "message": "Audio file exceeds the 10 MB limit.",
-                    },
-                )
-
-            suffix = (
-                os.path.splitext(file.filename)[1]
-                or ".wav"
+            print(
+                "Voice audio bytes:",
+                len(content),
             )
 
-            with tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=suffix,
-            ) as temp:
-                temp_path = temp.name
-                temp.write(content)
+            # =================================================
+            # PROCESS AUDIO
+            # =================================================
 
-            # -----------------------------
-            # STT
-            # -----------------------------
+            result = await process_audio(
+                curly=curly,
+                stt=stt,
+                session_id=session_id,
+                content=content,
+                filename=file.filename,
+                context=context,
+            )
 
-            try:
-                transcription = stt.transcribe(
-                    temp_path
-                )
-            except Exception as error:
-                curly.set_state(
-                    session_id,
-                    CurlyState.ERROR,
-                )
+            print()
+            print("========== VOICE PROCESSING COMPLETE ==========")
 
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "code": "STT_FAILED",
-                        "message": "Speech recognition failed.",
-                    },
-                ) from error
+            print(
+                "Transcript:",
+                result.text,
+            )
 
-            text = transcription.get(
-                "text",
-                "",
-            ).strip()
+            print(
+                "Curly response:",
+                result.curly_response.text,
+            )
 
-            if not text:
-                curly.set_state(
-                    session_id,
-                    CurlyState.LISTENING,
-                )
+            print(
+                "Curly type:",
+                result.curly_response.type.value,
+            )
 
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "code": "NO_SPEECH",
-                        "message": "No speech was detected.",
-                    },
-                )
+            print(
+                "Curly command:",
+                result.curly_response.command.name,
+            )
 
-            # -----------------------------
-            # CURLY
-            # -----------------------------
+            print(
+                "Curly state:",
+                result.curly_response.state.value,
+            )
 
-            try:
-                curly_response = await curly.chat(
-                    session_id=session_id,
-                    text=text,
-                    context=environment_context,
-                )
-            except Exception as error:
-                curly.set_state(
-                    session_id,
-                    CurlyState.ERROR,
-                )
+            print("===============================================")
+            print()
 
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "code": "CURLY_PROCESSING_FAILED",
-                        "message": "Curly could not process the request.",
-                    },
-                ) from error
+            # =================================================
+            # VALIDATE CURLY RESPONSE
+            # =================================================
 
-            # -----------------------------
-            # TTS
-            # -----------------------------
-
-            # Do not synthesize an empty response.
-            if not curly_response.text:
+            if not result.curly_response.text:
                 raise HTTPException(
                     status_code=500,
                     detail={
                         "code": "EMPTY_RESPONSE",
-                        "message": "Curly produced no spoken response.",
+                        "message": (
+                            "Curly produced no spoken response."
+                        ),
                     },
                 )
+
+            # =================================================
+            # SET CURLY STATE
+            # =================================================
 
             curly.set_state(
                 session_id,
                 CurlyState.SPEAKING,
             )
 
+            # =================================================
+            # TEXT TO SPEECH
+            # =================================================
+
             try:
+
                 audio_path = await tts.synthesize(
-                    curly_response.text
+                    result.curly_response.text
                 )
+
+                print(
+                    "TTS audio path:",
+                    audio_path,
+                )
+
             except Exception as error:
+
                 curly.set_state(
                     session_id,
                     CurlyState.ERROR,
+                )
+
+                print(
+                    "TTS ERROR:",
+                    repr(error),
                 )
 
                 raise HTTPException(
                     status_code=500,
                     detail={
                         "code": "TTS_FAILED",
-                        "message": "Speech generation failed.",
+                        "message": (
+                            "Speech generation failed."
+                        ),
                     },
                 ) from error
 
-            # -----------------------------
-            # RETURN AUDIO
-            # -----------------------------
+            # =================================================
+            # RETURN AUDIO RESPONSE
+            # =================================================
 
-            response = FileResponse(
+            return FileResponse(
                 path=audio_path,
                 media_type="audio/mpeg",
                 filename=audio_path.name,
                 headers={
                     "X-Curly-Session-Id": session_id,
-                    "X-Curly-Transcript": text,
+
+                    "X-Curly-Transcript": (
+                        result.text
+                    ),
+
                     "X-Curly-Type": (
-                        curly_response.type.value
+                        result.curly_response.type.value
                     ),
+
                     "X-Curly-Command": (
-                        curly_response.command.name
+                        result.curly_response.command.name
                     ),
+
                     "X-Curly-State": (
-                        curly_response.state.value
+                        result.curly_response.state.value
                     ),
                 },
             )
 
-            return response
+        # ====================================================
+        # AUDIO PIPELINE ERROR
+        # ====================================================
+
+        except AudioPipelineError as error:
+
+            print()
+            print("========== AUDIO PIPELINE ERROR ==========")
+
+            print(
+                "Status:",
+                error.status_code,
+            )
+
+            print(
+                "Code:",
+                error.code,
+            )
+
+            print(
+                "Message:",
+                error.message,
+            )
+
+            print("==========================================")
+            print()
+
+            raise HTTPException(
+                status_code=error.status_code,
+                detail={
+                    "code": error.code,
+                    "message": error.message,
+                },
+            ) from error
+
+        # ====================================================
+        # EXISTING HTTP ERROR
+        # ====================================================
 
         except HTTPException:
+
             raise
 
+        # ====================================================
+        # UNEXPECTED ERROR
+        # ====================================================
+
         except Exception as error:
+
+            print()
+            print("========== VOICE PROCESSING ERROR ==========")
+
+            print(
+                "Error type:",
+                type(error),
+            )
+
+            print(
+                "Error:",
+                repr(error),
+            )
+
+            print("============================================")
+            print()
+
             curly.set_state(
                 session_id,
                 CurlyState.ERROR,
@@ -240,18 +296,10 @@ def create_voice_router(
                 status_code=500,
                 detail={
                     "code": "VOICE_PROCESSING_FAILED",
-                    "message": "Voice processing failed.",
+                    "message": (
+                        "Voice processing failed."
+                    ),
                 },
             ) from error
-
-        finally:
-            if (
-                temp_path
-                and os.path.exists(temp_path)
-            ):
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
 
     return router

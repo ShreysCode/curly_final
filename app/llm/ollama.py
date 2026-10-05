@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from app.config import settings
 import os
 import time
 from typing import Any, AsyncIterator
@@ -48,26 +49,11 @@ class OllamaClient:
 
         # Keep inference bounded for a voice assistant. These are API options,
         # not Modelfile edits. Environment variables allow tuning later.
-        self.num_ctx = self._env_int("CURLY_OLLAMA_NUM_CTX", 2048)
-        self.num_predict = self._env_int("CURLY_OLLAMA_NUM_PREDICT", 256)
-        self.temperature = self._env_float("CURLY_OLLAMA_TEMPERATURE", 0.35)
-        self.keep_alive = os.getenv("CURLY_OLLAMA_KEEP_ALIVE", "5m")
+        self.num_ctx = settings.ollama_num_ctx
+        self.num_predict = settings.llm_max_tokens
+        self.temperature = settings.llm_temperature
+        self.keep_alive = settings.ollama_keep_alive
 
-    @staticmethod
-    def _env_int(name: str, default: int) -> int:
-        try:
-            value = int(os.getenv(name, str(default)))
-            return value if value > 0 else default
-        except (TypeError, ValueError):
-            return default
-
-    @staticmethod
-    def _env_float(name: str, default: float) -> float:
-        try:
-            value = float(os.getenv(name, str(default)))
-            return value if value >= 0 else default
-        except (TypeError, ValueError):
-            return default
 
     def _clean_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Normalize messages into the exact shape Ollama chat expects."""

@@ -7,7 +7,6 @@ import time
 
 from app.config import settings
 from app.core.intent import detect_command
-from app.core.llm_response import LLMResponseGenerator
 from app.core.prompts import SYSTEM_PROMPT
 from app.core.session import Session
 from app.knowledge.info_repository import InfoRepository
@@ -36,8 +35,6 @@ class Curly:
             / "knowledge"
             / "info_repo.json"
         )
-
-        self.response_generator = LLMResponseGenerator(llm)
 
         self.sessions: dict[str, Session] = {}
         self._authoritative_data_cache: dict | None = None
@@ -214,8 +211,114 @@ class Curly:
             return "lab"
 
         return None
+
+
+    def detect_knowledge_subtopic(
+        self,
+        text: str,
+    ) -> str:
+        text = text.lower().strip()
+
+        if any(term in text for term in (
+            "director",
+            "current director",
+            "who heads",
+            "head of nrcy",
+        )):
+            return "director"
+
+        if any(term in text for term in (
+            "email",
+            "e-mail",
+            "phone",
+            "telephone",
+            "contact",
+            "address",
+            "pin",
+        )):
+            return "contact"
+
+        if any(term in text for term in (
+            "who is",
+            "scientist",
+            "scientists",
+            "professor",
+            "principal scientist",
+            "senior scientist",
+            "important people",
+            "staff",
+        )):
+            return "people"
+
+        if any(term in text for term in (
+            "research",
+            "researches",
+            "breeding",
+            "nutrition",
+            "health",
+            "genetics",
+            "reproduction",
+            "fibre",
+            "fiber",
+            "yak products",
+            "production",
+            "conservation",
+            "research paper",
+            "publication",
+            "publications",
+            "dissertation",
+        )):
+            return "research"
+
+        if any(term in text for term in (
+            "project",
+            "projects",
+            "artificial intelligence",
+            "iot",
+            "internet of things",
+            "smart yak",
+            "stress prediction",
+            "geo-fencing",
+            "geofencing",
+            "centre of excellence",
+            "center of excellence",
+        )):
+            return "projects"
+
+        if any(term in text for term in (
+            "achievement",
+            "achievements",
+            "ftai",
+            "churpi",
+            "gi tag",
+            "geographical indication",
+        )):
+            return "achievements"
+
+        if any(term in text for term in (
+            "farm",
+            "experimental farm",
+            "facilities",
+            "facility",
+        )):
+            return "farm"
+
+        if any(term in text for term in (
+            "farmer",
+            "farmers",
+            "outreach",
+            "extension",
+            "sikkim",
+            "ladakh",
+            "arunachal",
+            "himalayan",
+        )):
+            return "outreach"
+
+        # General NRCY identity / overview question.
+        return "identity"
     
-       # -----------------------------------------
+    # -----------------------------------------
     # PERSON / ROLE RESOLUTION
     # -----------------------------------------
 
@@ -1234,7 +1337,10 @@ class Curly:
             knowledge_blocks = []
             for topic in topics:
                 try:
-                    value = self.knowledge.get_context(topic)
+                    value = self.knowledge.get_context(
+                        topic,
+                        self.detect_knowledge_subtopic(clause),
+                    )
                 except Exception:
                     value = ""
                 if value:
@@ -1929,8 +2035,11 @@ Keep the answer concise and natural because it will be spoken aloud.
 
         if topic:
             knowledge_context = (
-                self.knowledge.get_context(topic)
-            )
+    self.knowledge.get_context(
+        topic,
+        self.detect_knowledge_subtopic(text),
+    )
+)
         else:
             knowledge_context = ""
 
@@ -2000,35 +2109,6 @@ Keep the response concise and suitable for speech.
 
         # -------------------------------------
         # 4. NORMAL LLM RESPONSE
-        # -------------------------------------
-
-        self.save_message(
-            session_id,
-            "user",
-            text,
-        )
-
-        self.save_message(
-            session_id,
-            "assistant",
-            response_text,
-        )
-
-        self.set_state(
-            session_id,
-            CurlyState.SPEAKING,
-        )
-
-        return CurlyResponse(
-            type=ResponseType.RESPONSE,
-            command=Command.NONE,
-            text=response_text,
-            state=CurlyState.SPEAKING,
-            intent_source=IntentSource.LLM,
-        )
-
-        # -------------------------------------
-        # 5. NORMAL LLM RESPONSE
         # -------------------------------------
 
         self.save_message(
@@ -2151,10 +2231,13 @@ Keep the response concise and suitable for speech.
         if topic:
 
             knowledge_context = (
-                self.knowledge.get_context(
-                    topic
-                )
-            )
+    self.knowledge.get_context(
+        topic,
+        self.detect_knowledge_subtopic(
+            normalized_text
+        ),
+    )
+)
 
         else:
 

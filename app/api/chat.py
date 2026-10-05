@@ -41,7 +41,6 @@ def create_chat_router(
             )
 
         except Exception as error:
-            
             import logging
 
             logging.exception(
@@ -50,9 +49,12 @@ def create_chat_router(
 
             raise HTTPException(
                 status_code=500,
-                detail=str(error)
+                detail={
+                    "code": "CURLY_PROCESSING_FAILED",
+                    "message": "Curly could not process the request.",
+                },
             ) from error
-
+        
     # -----------------------------------------
     # ANDROID EVENTS
     # -----------------------------------------

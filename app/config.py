@@ -11,12 +11,14 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.1:8b"
 
     # --------------------------------
-    # Temperature 
+    # LLM / Ollama
     # --------------------------------
 
-    llm_temperature: float = 0.3
-    llm_max_tokens: int = 64
-
+    llm_temperature: float = 0.2
+    llm_max_tokens: int = 96
+    ollama_num_ctx: int = 2048
+    ollama_keep_alive: str = "5m"
+    
     # --------------------------------
     # Conversation
     # --------------------------------
